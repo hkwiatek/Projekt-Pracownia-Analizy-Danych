@@ -1,0 +1,326 @@
+---
+title: "Projekt_PAD_ostateczny"
+format: html
+editor: visual
+---
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(scales)
+library(caret)
+library(e1071)
+library(rpart)
+library(rpart.plot)
+
+```
+
+```{r}
+heart_data <- read.csv("processed.cleveland.data", header = FALSE, na.strings = "?")
+colnames(heart_data) <- c("age", "sex", "cp", "trestbps", "chol", "fbs", 
+                          "restecg", "thalach", "exang", "oldpeak", 
+                          "slope", "ca", "thal", "num")
+heart_data <- na.omit(heart_data)
+
+```
+
+```{r}
+heart_data <- heart_data %>%
+  mutate(
+    num = ifelse(as.numeric(as.character(num)) > 0, 1, 0),
+    num = factor(num, levels = c(0, 1), labels = c("Zdrowy", "Chory")),
+    sex = factor(sex, levels = c(0, 1), labels = c("Kobieta", "Mężczyzna")),
+    cp = factor(cp, levels = c(1, 2, 3, 4), labels = c("Typowy", "Nietypowy", "Nie-sercowy", "Bezobjawowy")),
+    fbs = factor(fbs, levels = c(0, 1), labels = c("< 120", "> 120")),
+    restecg = factor(restecg, levels = c(0, 1, 2), labels = c("Norma", "ST-T", "Hipertrofia")),
+    exang = factor(exang, levels = c(0, 1), labels = c("Nie", "Tak")),
+    slope = factor(slope, levels = c(1, 2, 3), labels = c("W górę", "Płasko", "W dół")),
+    ca = factor(ca),
+    thal = factor(thal, levels = c(3, 6, 7), labels = c("Norma", "Odwracalny", "Trwały"))
+  )
+```
+
+```{r}
+ggplot(heart_data, aes(x = num, fill = num)) +
+  geom_bar(color = "black", alpha = 0.8) +
+  scale_fill_manual(values = c("#4CAF50", "#F44336")) +
+  labs(
+    title = "Poprawny balans klas",
+    subtitle = "Złączone stadia 1-4 w jedną kategorię 'Chory'",
+    x = "Diagnoza", 
+    y = "Liczba pacjentów"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+heart_data %>%
+  select(age, trestbps, chol, thalach, oldpeak) %>% 
+  pivot_longer(cols = everything(), names_to = "Zmienna", values_to = "Wartość") %>%
+  ggplot(aes(x = Wartość)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 25, fill = "skyblue", color = "black", alpha = 0.6) +
+  geom_density(kernel = "gaussian", color = "darkblue", linewidth = 1.2) +
+  facet_wrap(~ Zmienna, scales = "free", ncol = 3) +
+  labs(
+    title = "Analiza rozkładu zmiennych numerycznych",
+    subtitle = "Zastosowano jądrowy estymator gęstości (Jądro Radialne/Gaussa)",
+    x = "Wartość", 
+    y = "Gęstość"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+num_vars <- heart_data %>% select(age, trestbps, chol, thalach, oldpeak)
+cor_matrix <- cor(num_vars, method = "spearman")
+
+corrplot(cor_matrix, 
+         method = "color", 
+         type = "upper", 
+         addCoef.col = "black", 
+         tl.col = "black", 
+         tl.srt = 45,
+         title = "Korelacja Spearmana zmiennych numerycznych",
+         mar = c(0,0,2,0)) 
+
+```
+
+```{r}
+heart_data %>%
+  select(num, age, trestbps, chol, thalach, oldpeak) %>%
+  pivot_longer(cols = -num, names_to = "Zmienna", values_to = "Wartość") %>%
+  ggplot(aes(x = num, y = Wartość, fill = num)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "red", outlier.shape = 16) +
+  facet_wrap(~ Zmienna, scales = "free", ncol = 3) +
+  scale_fill_manual(values = c("#4CAF50", "#F44336")) +
+  labs(
+    title = "Zmienne numeryczne a diagnoza (Boxploty)",
+    x = "Diagnoza",
+    y = "Wartość"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+heart_data %>%
+  select(num, sex, exang, fbs, restecg) %>%
+  pivot_longer(cols = -num, names_to = "Zmienna", values_to = "Kategoria") %>%
+  drop_na(Kategoria) %>%
+  mutate(Zmienna = recode(Zmienna, 
+                          sex = "Płeć", 
+                          exang = "Dławica wysiłkowa (exang)", 
+                          fbs = "Cukier we krwi (fbs)", 
+                          restecg = "Wynik EKG (restecg)")) %>%
+  ggplot(aes(x = Kategoria, fill = num)) +
+  geom_bar(position = "fill", color = "black", alpha = 0.8) + 
+  facet_wrap(~ Zmienna, scales = "free_x", ncol = 2) +
+  scale_fill_manual(values = c("#4CAF50", "#F44336"), name = "Diagnoza") +
+  scale_y_continuous(labels = percent_format()) + 
+  labs(
+    title = "Procentowe ryzyko choroby: Podstawowe wywiady",
+    x = "Odpowiedź / Wynik",
+    y = "Procentowy odsetek pacjentów"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 11, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 12, face = "bold")
+  )
+```
+
+```{r}
+heart_data %>%
+  select(num, cp, ca, thal, slope) %>%
+  pivot_longer(cols = -num, names_to = "Zmienna", values_to = "Kategoria") %>%
+  drop_na(Kategoria) %>%
+  mutate(Zmienna = recode(Zmienna, 
+                          cp = "Rodzaj bólu klatki (cp)", 
+                          ca = "Liczba zabarwionych naczyń (ca)", 
+                          thal = "Defekt w scyntygrafii (thal)", 
+                          slope = "Nachylenie odcinka ST (slope)")) %>%
+  ggplot(aes(x = Kategoria, fill = num)) +
+  geom_bar(position = "fill", color = "black", alpha = 0.8) + 
+  facet_wrap(~ Zmienna, scales = "free_x", ncol = 2) +
+  scale_fill_manual(values = c("#4CAF50", "#F44336"), name = "Diagnoza") +
+  scale_y_continuous(labels = percent_format()) + 
+  labs(
+    title = "Procentowe ryzyko choroby: Badania specjalistyczne",
+    x = "Kategoria diagnostyczna",
+    y = "Procentowy odsetek pacjentów"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 11, angle = 15, hjust = 1, face = "bold"), 
+    legend.position = "bottom",
+    strip.text = element_text(size = 12, face = "bold")
+  )
+```
+
+```{r}
+set.seed(123) 
+trainIndex <- createDataPartition(heart_data$num, p = 0.7, list = FALSE)
+train_data <- heart_data[trainIndex, ]
+test_data  <- heart_data[-trainIndex, ]
+```
+
+```{r}
+num_cols <- c("age", "trestbps", "chol", "thalach", "oldpeak")
+
+preProcValues <- preProcess(train_data[, num_cols], method = c("center", "scale"))
+
+train_data_std <- train_data
+test_data_std  <- test_data
+
+train_data_std[, num_cols] <- predict(preProcValues, train_data[, num_cols])
+test_data_std[, num_cols]  <- predict(preProcValues, test_data[, num_cols])
+```
+
+```{r}
+model_nb <- naiveBayes(num ~ ., data = train_data_std)
+model_log <- glm(num ~ ., data = train_data_std, family = binomial)
+macierz_strat <- matrix(c(0, 1,
+                          3, 0), byrow = TRUE, nrow = 2)
+
+model_tree_big <- rpart(num ~ ., data = train_data_std, method = "class",
+                        parms = list(loss = macierz_strat),
+                        control = rpart.control(cp = 0.001))
+
+
+najlepsze_cp <- model_tree_big$cptable[which.min(model_tree_big$cptable[,"xerror"]), "CP"]
+model_tree <- prune(model_tree_big, cp = najlepsze_cp)
+```
+
+```{r}
+prob_nb_train <- predict(model_nb, train_data_std, type = "raw")
+pred_nb_train <- factor(ifelse(prob_nb_train[, "Chory"] > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+
+prob_log_train <- predict(model_log, train_data_std, type = "response")
+pred_log_train <- factor(ifelse(prob_log_train > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+
+pred_tree_train <- predict(model_tree, train_data_std, type = "class")
+
+
+cm_nb_train <- confusionMatrix(pred_nb_train, train_data_std$num, positive = "Chory")
+cm_log_train <- confusionMatrix(pred_log_train, train_data_std$num, positive = "Chory")
+cm_tree_train <- confusionMatrix(pred_tree_train, train_data_std$num, positive = "Chory")
+
+
+wyniki_trening <- data.frame(
+  Model = c("Naiwny Bayes", "Regresja Logistyczna", "Drzewo Decyzyjne"),
+  Czulość = c(cm_nb_train$byClass["Sensitivity"], cm_log_train$byClass["Sensitivity"], cm_tree_train$byClass["Sensitivity"]),
+  Swoistość = c(cm_nb_train$byClass["Specificity"], cm_log_train$byClass["Specificity"], cm_tree_train$byClass["Specificity"]),
+  Dokladność = c(cm_nb_train$overall["Accuracy"], cm_log_train$overall["Accuracy"], cm_tree_train$overall["Accuracy"])
+)
+
+
+wyniki_trening[,-1] <- round(wyniki_trening[,-1] * 100, 2)
+print(wyniki_trening)
+```
+
+```{r}
+set.seed(123)
+folds <- createFolds(train_data_std$num, k = 10, list = TRUE, returnTrain = FALSE)
+
+
+czul_nb <- czul_log <- czul_tree <- numeric(10)
+swoi_nb <- swoi_log <- swoi_tree <- numeric(10)
+dokl_nb <- dokl_log <- dokl_tree <- numeric(10)
+
+
+for(i in 1:10) {
+  val_idx <- folds[[i]]
+  cv_train <- train_data_std[-val_idx, ]
+  cv_val   <- train_data_std[val_idx, ]
+  
+  m_nb  <- naiveBayes(num ~ ., data = cv_train)
+  m_log <- glm(num ~ ., data = cv_train, family = binomial)
+  
+  m_tree_big <- rpart(num ~ ., data = cv_train, method = "class", 
+                      parms = list(loss = macierz_strat), 
+                      control = rpart.control(cp = 0.001))
+  m_tree <- prune(m_tree_big, cp = m_tree_big$cptable[which.min(m_tree_big$cptable[,"xerror"]), "CP"])
+  
+  p_nb  <- factor(ifelse(predict(m_nb, cv_val, type = "raw")[, "Chory"] > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+  p_log <- factor(ifelse(predict(m_log, cv_val, type = "response") > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+  p_tree <- predict(m_tree, cv_val, type = "class")
+  
+  cm_nb   <- confusionMatrix(p_nb, cv_val$num, positive = "Chory")
+  cm_log  <- confusionMatrix(p_log, cv_val$num, positive = "Chory")
+  cm_tree <- confusionMatrix(p_tree, cv_val$num, positive = "Chory")
+  
+  czul_nb[i] <- cm_nb$byClass["Sensitivity"]; swoi_nb[i] <- cm_nb$byClass["Specificity"]; dokl_nb[i] <- cm_nb$overall["Accuracy"]
+  czul_log[i] <- cm_log$byClass["Sensitivity"]; swoi_log[i] <- cm_log$byClass["Specificity"]; dokl_log[i] <- cm_log$overall["Accuracy"]
+  czul_tree[i] <- cm_tree$byClass["Sensitivity"]; swoi_tree[i] <- cm_tree$byClass["Specificity"]; dokl_tree[i] <- cm_tree$overall["Accuracy"]
+}
+
+
+wyniki_cv <- data.frame(
+  Model = c("Naiwny Bayes", "Regresja Logistyczna", "Drzewo Decyzyjne"),
+  Czulość_CV = c(mean(czul_nb), mean(czul_log), mean(czul_tree)),
+  Swoistość_CV = c(mean(swoi_nb), mean(swoi_log), mean(swoi_tree)),
+  Dokladność_CV = c(mean(dokl_nb), mean(dokl_log), mean(dokl_tree))
+)
+
+wyniki_cv[,-1] <- round(wyniki_cv[,-1] * 100, 2)
+print(wyniki_cv)
+```
+
+```{r}
+prob_nb_test <- predict(model_nb, test_data_std, type = "raw")
+pred_nb_test <- factor(ifelse(prob_nb_test[, "Chory"] > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+
+prob_log_test <- predict(model_log, test_data_std, type = "response")
+pred_log_test <- factor(ifelse(prob_log_test > 0.25, "Chory", "Zdrowy"), levels = c("Zdrowy", "Chory"))
+
+pred_tree_test <- predict(model_tree, test_data_std, type = "class")
+
+
+cm_nb <- confusionMatrix(pred_nb_test, test_data_std$num, positive = "Chory")
+cm_log <- confusionMatrix(pred_log_test, test_data_std$num, positive = "Chory")
+cm_tree <- confusionMatrix(pred_tree_test, test_data_std$num, positive = "Chory")
+
+wyniki_modeli <- data.frame(
+  Model = c("Naiwny Bayes", "Regresja Logistyczna", "Drzewo Decyzyjne"),
+  Czulość = c(cm_nb$byClass["Sensitivity"], cm_log$byClass["Sensitivity"], cm_tree$byClass["Sensitivity"]),
+  Swoistość = c(cm_nb$byClass["Specificity"], cm_log$byClass["Specificity"], cm_tree$byClass["Specificity"]),
+  Dokladność = c(cm_nb$overall["Accuracy"], cm_log$overall["Accuracy"], cm_tree$overall["Accuracy"])
+)
+
+
+wyniki_modeli[,-1] <- round(wyniki_modeli[,-1] * 100, 2)
+print(wyniki_modeli)
+
+
+indeks_zwyciezcy <- which.max(wyniki_modeli$Czulość)
+najlepszy_model <- wyniki_modeli$Model[indeks_zwyciezcy]
+najlepsza_czulosc <- wyniki_modeli$Czulość[indeks_zwyciezcy]
+
+
+cat("Najlepszy model do wdrożenia medycznego to :", najlepszy_model, "<<<\n")
+cat("Osiągnął najwyższą czułość na poziomie     :", najlepsza_czulosc, "%\n")
+```
+
+```{r}
+summary(model_log)
+```
+
+```{r}
+rpart.plot(model_tree, 
+           type = 3, 
+           extra = 106, 
+           fallen.leaves = TRUE, 
+           main = "Struktura zoptymalizowanego Drzewa Decyzyjnego",
+           box.palette = c("#4CAF50", "#F44336"), 
+           shadow.col = "gray")
+```
+
+```{r}
+print(model_nb)
+```
